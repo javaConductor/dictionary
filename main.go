@@ -3,11 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"io"
-	"log"
 	"os"
-	"os/user"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -27,122 +23,119 @@ func main() {
 
 	var whichWords Predicate
 	whichWords = func(w string) bool {
+		defined, err := IsWordDefined(w)
+		if defined || err != nil {
+			return false
+		}
 		return true
 	}
 
-	//	b, e := os.OpenFile("/usr/share/dict/words", os.O_RDONLY, os.ModePerm)
-	b, e := os.OpenFile("words", os.O_RDONLY, os.ModePerm)
-	if e != nil {
-		panic(e)
-	}
-	reader := io.Reader(b)
-
 	go FindWordDefinitions(chWords, chWordDefs, chNf, chDone, chErr, whichWords)
 
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatalf("Could not get user information: %w", err)
-	}
-
-	path := filepath.Join(usr.HomeDir, ".mydict")
-
 	go func() {
+		count := 0
+		nfCount := 0
 		for {
 			select {
-			case wd := <-chWordDefs:
-				fmt.Println("\nwordDef: ", wd)
-				err := handleWordDef(path, &wd)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error handling [%v] from [%s]: %w", wd.Word, wd.Source, err)
+			case wd, ok := <-chWordDefs:
+				if !ok {
+					fmt.Printf("\nStored %d Word Definitions and %d words not found. ", count, nfCount)
+					chDone <- true
+					return
 				}
+				fmt.Println("\nwordDef: ", wd)
+				err := handleWordDef(&wd)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error handling [%s] from [%s]: \n\t%s", wd.Word, wd.Source, err)
+				}
+				count++
 
 			case wnf := <-chNf:
+				nfCount++
 				fmt.Println("\nwordNotfound: ", wnf)
 
+			case wErr := <-chErr:
+				fmt.Printf("\nError: Word: [%s] Source: %s: \nMessage: %s\n", wErr.Word, wErr.Source, wErr.Error)
+
 			case <-chDone:
+				fmt.Printf("\nDONE: Stored %d Word Definitions and %d words not found. ", count, nfCount)
+				close(chWordDefs)
 				return
+
+				// default:
+				// 	fmt.Println("main gofunc: idle")
+				// 	time.Sleep(100 * time.Millisecond)
 			}
+
 		}
+
 	}()
 
-	r := bufio.NewReader(reader)
+	err := populateChannel(chWords, chDone, chErr)
+	if err != nil {
+		panic(fmt.Errorf("Could not populate channel with words: %w", err))
+	}
+}
+
+func populateChannel(chWords chan string, chDone chan bool, chErr chan WordSearchError) error {
+
+	// chBibleWords, err := createFileWordsChannel("bible.txt")
+	chBibleWords, err := createFileWordsChannel("b.txt")
+	if err != nil {
+		return err
+	}
+
 	for {
-		line, _, err := r.ReadLine()
-		if err != nil {
-			if io.EOF == err {
-
-				time.Sleep(100 * time.Millisecond)
-				for {
-					if len(chWords) == 0 {
-						time.Sleep(100 * time.Millisecond)
-						break
-					}
-				}
-				chDone <- true
-				break
+		select {
+		case word, ok := <-chBibleWords:
+			word = strings.Trim(word, ".,:;?()!")
+			if !ok {
+				close(chWords)
+				return nil
 			}
-			// panic(err)
+			defined, err := IsWordDefined(word)
+			if err != nil {
+				return err
+			}
+			if !defined {
+				chWords <- word
+			}
 		}
 
-		word := strings.TrimSpace(string(line))
-		if word != "" {
-			chWords <- word
-		}
 	}
 
 }
 
-func handleWordDef(path string, wdef *WordDefinition) error {
-
-	// open the file
-	// word dir
-	wordDir := filepath.Join(path, wdef.Word)
-	defDir := filepath.Join(wordDir, wdef.Source)
-
-	exists, err := directoryExists(defDir)
-	if err != nil {
-		return fmt.Errorf("Could not read directory [%s]: %w", defDir, err)
-	}
-	if !exists {
-		err := os.MkdirAll(defDir, 0755)
-		if err != nil {
-			return fmt.Errorf("Could not create directory [%s]: %w", defDir, err)
-		}
-	}
-	defFile := filepath.Join(defDir, "definitions.txt")
-
-	f, err := os.Create(defFile)
-	if err != nil {
-		return fmt.Errorf("Could not open create directory [%s]: %w", defDir, err)
-	}
-
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	defer f.Sync()
-
-	for _, wordDef := range wdef.Definitions {
-		f.WriteString(wordDef)
-		f.WriteString("\n\n")
-	}
-
-	return nil
+func handleWordDef(wdef *WordDefinition) error {
+	return StoreDefinition(*wdef)
 }
 
 func handleWordNotFound(path string, wnf *WordNotFound) error {
 	return nil
 }
 
-func directoryExists(path string) (bool, error) {
+func createFileWordsChannel(path string) (<-chan string, error) {
 
-	stat, err := os.Stat(path)
-
+	file, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
+		return nil, err
 	}
-	return stat.IsDir(), nil
+
+	// create the channels
+	chWords := make(chan string)
+	scanner := bufio.NewScanner(file)
+
+	scanner.Split(bufio.ScanWords)
+
+	go func() {
+		defer file.Close()
+		for scanner.Scan() {
+			word := strings.TrimSpace(scanner.Text())
+			if word != "" {
+				chWords <- scanner.Text()
+			}
+		}
+		close(chWords)
+	}()
+	return chWords, nil
 }

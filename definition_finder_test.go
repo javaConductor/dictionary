@@ -16,7 +16,7 @@ func TestRapidAPIWordDefFinder_FindDefinition(t *testing.T) {
 	chNf := make(chan WordNotFound, 2)
 	chDone := make(chan bool, 1)
 	chErr := make(chan WordSearchError, 2)
-	chWrk := createWorkerChannel(20)
+	chWrk := make(chan int)
 
 	tests := []struct {
 		name        string
@@ -54,36 +54,10 @@ func TestRapidAPIWordDefFinder_FindDefinition(t *testing.T) {
 			go func() {
 				fmt.Printf("Starting %s ...\n", tt.name)
 				channels := Channels{chWord: chWord, c: tt.channel, chNf: tt.channelNf, chDone: tt.channelDone, chErr: tt.channelErr, chWrk: chWrk}
+				StartFinder(f, channels)
 				f.Start(channels)
 
 			}()
-
-			// go func() {
-			// 	for {
-			// 		select {
-
-			// 		case <-tt.channelDone:
-			// 			fmt.Println("\nDONE!")
-			// 			return
-
-			// 		case e := <-chErr:
-			// 			fmt.Printf("\nError Encountered on source [%v]", e.Error)
-
-			// 		case nf := <-chNf:
-			// 			fmt.Printf("\nCould not find [%s] at [%s]", nf.Word, nf.Source)
-
-			// 		case wd := <-ch:
-			// 			fmt.Println("wd:", wd)
-			// 			assert.NotNil(t, wd)
-			// 			assert.Contains(t, wd.Definitions[0], tt.wantText)
-			// 			assert.Equal(t, true, wd.Found)
-			// 		default:
-			// 			time.Sleep(1000 * time.Millisecond)
-			// 			fmt.Printf("\nTest [%s] Nothing happening!!", tt.name)
-			// 		}
-			// 	}
-
-			// }()
 
 			chWord <- tt.word
 			tt.channelDone <- true
@@ -99,19 +73,20 @@ func TestRapidAPIWordDefFinder_FindDefinition(t *testing.T) {
 
 func TestRapidAPIWordDefFinder_FindDefinitionBadWord(t *testing.T) {
 
-	f := &RapidAPIWordDefFinder{}
+	f := WordInfoFinder(&RapidAPIWordDefFinder{})
 
 	ch := make(chan WordDefinition, 10)
 	chNf := make(chan WordNotFound, 10)
 	chErr := make(chan WordSearchError, 10)
 	chWord := make(chan string)
 	chDone := make(chan bool)
-	chWrk := createWorkerChannel(20)
+	chWrk := make(chan int)
 
 	go func() {
 		channels := Channels{chWord: chWord, c: ch, chNf: chNf, chDone: chDone, chErr: chErr, chWrk: chWrk}
 		fmt.Printf("Starting %s ...\n", "TestRapidAPIWordDefFinder_FindDefinitionBadWord")
-		f.Start(channels)
+		StartFinder(f, channels)
+
 		fmt.Println("Started.")
 		//assert.NotNil(t, err)
 	}()

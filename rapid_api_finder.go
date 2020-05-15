@@ -24,13 +24,15 @@ type definition struct {
 	ResultMessage string  `json:"result_msg"`
 }
 
-type ourWorker struct {
+// RapidAPIWordDefFinder ...
+type RapidAPIWordDefFinder struct {
 	Instance int
 }
 
-func (w ourWorker) findDefinition(word string, chErr chan WordSearchError) (*WordDefinition, *WordNotFound, error) {
+// FindDefinition ...
+func (f *RapidAPIWordDefFinder) FindDefinition(word string, chErr chan WordSearchError, instance int) (*WordDefinition, *WordNotFound, error) {
 
-	fmt.Printf("rapid_api_worker_%d searching for [%s]\n", w.instance(), word)
+	fmt.Printf("rapid_api_worker_%d searching for [%s]\n", instance, word)
 	url := "https://twinword-word-graph-dictionary.p.rapidapi.com/definition/?entry=" + word
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -48,8 +50,8 @@ func (w ourWorker) findDefinition(word string, chErr chan WordSearchError) (*Wor
 	defer res.Body.Close()
 	body, _ := ioutil.ReadAll(res.Body)
 
-	//s := string(body)
-	//fmt.Printf("RapidAPIWordDefFinder.FindDefinition: [%s]\n", s)
+	// s := string(body)
+	// fmt.Printf("RapidAPIWordDefFinder.findDefinition: [%s]\n", s)
 	var wdef definition
 	err = json.Unmarshal(body, &wdef)
 	if err != nil {
@@ -58,11 +60,11 @@ func (w ourWorker) findDefinition(word string, chErr chan WordSearchError) (*Wor
 
 	num, err := strconv.ParseInt(wdef.ResultCode, 10, 64)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Could not read response from server: %w", err)
+		return nil, nil, fmt.Errorf("Could not read result code from server: %w", err)
 	}
 
 	if num != 200 {
-		return nil, &WordNotFound{Word: word, Source: source, Message: wdef.ResultMessage}, nil
+		return nil, &WordNotFound{Word: word, Source: f.Name(), Message: wdef.ResultMessage}, nil
 	}
 
 	wordDefinition := make([]string, 0)
@@ -83,74 +85,18 @@ func (w ourWorker) findDefinition(word string, chErr chan WordSearchError) (*Wor
 		wordDefinition = append(wordDefinition, wdef.Meaning.Adjective)
 	}
 
-	wd := WordDefinition{Definitions: wordDefinition, Source: source, Word: word, Found: true}
+	wd := WordDefinition{Definitions: wordDefinition, Source: f.Name(), Word: word, Found: true}
 
 	return &wd, nil, nil
 
 }
 
-func (w *ourWorker) instance() int {
-	return w.Instance
-}
-
-// RapidAPIWordDefFinder ...
-type RapidAPIWordDefFinder struct {
-	Instance int
-}
-
 // Name ...
 func (f *RapidAPIWordDefFinder) Name() string {
-	return string("RapidAPIWordDefFinder")
+	return "rapidapi.com"
 }
 
-var source string = "RapidAPI.com"
-
-// Start ...
-func (f *RapidAPIWordDefFinder) Start(channels Channels) {
-
-	for {
-		select {
-
-		case <-channels.chDone:
-			return
-
-		case word := <-channels.chWord:
-			//fmt.Printf("Finder %s searching for %s\n", f.Name(), word)
-			/// Only run when we have enough workers
-			worker := <-channels.chWrk
-			//defer func() { channels.chWrk <- worker }()
-			wd, wnf, err := worker.findDefinition(word, channels.chErr)
-			channels.chWrk <- worker
-			if err != nil {
-				channels.chErr <- WordSearchError{
-					Error:  err,
-					Source: source,
-					Word:   word,
-				}
-			}
-
-			/// check if found
-			if wnf != nil {
-				channels.chNf <- *wnf
-				continue
-			}
-			/// check if found
-			if wd == nil {
-				channels.chNf <- WordNotFound{Word: word, Source: source, Message: "Not found."}
-				continue
-			}
-			//fmt.Printf("\nWrote def of [%s] to channel %v.\n", word, channels.c)
-			channels.c <- *wd
-		}
-	}
-}
-
-func createWorkerChannel(size int) chan SearchWorker {
-	chWrk := make(chan SearchWorker, size)
-	for i := 0; i != size; i++ {
-
-		w := SearchWorker(&ourWorker{Instance: i + 1})
-		chWrk <- w
-	}
-	return chWrk
+// String ...
+func (f *RapidAPIWordDefFinder) String() string {
+	return f.Name()
 }
